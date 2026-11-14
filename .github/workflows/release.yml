@@ -1,28 +1,31 @@
+# Optimized by ci-cost (https://github.com/mariotavarez/ci-cost)
+# Applied 2 optimizations:
+# - [HIGH] Add npm dependency cache to "release" job
+# - [LOW] Use shallow clone in "release" job
+# Estimated savings: ~4 min/run
+#
 name: Release Binary
-
-on:
+'on':
   push:
     tags:
-      # 只认版本 tag，避免非版本 tag（如 test-xxx）被当成版本号发布出去。
-      - "v*"
+      - v*
   workflow_dispatch:
     inputs:
       dry_run:
-        description: "Run snapshot build without publishing"
+        description: Run snapshot build without publishing
         type: boolean
         default: true
         required: false
       ref:
-        description: "Git ref to test (branch or commit SHA)"
+        description: Git ref to test (branch or commit SHA)
         type: string
-        default: ""
+        default: ''
         required: false
       afrogweb_ref:
-        description: "afrogweb Git ref to build (branch, tag, or commit SHA)"
+        description: afrogweb Git ref to build (branch, tag, or commit SHA)
         type: string
-        default: "main"
+        default: main
         required: false
-
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -30,34 +33,27 @@ jobs:
       GOPROXY: https://proxy.golang.org,direct
       GOSUMDB: sum.golang.org
       AFROGWEB_REF: ${{ github.event.inputs.afrogweb_ref || 'main' }}
-
     steps:
       - uses: actions/checkout@v3
         with:
-          fetch-depth: 0
+          fetch-depth: 1
           ref: ${{ github.event.inputs.ref }}
-
       - uses: actions/setup-go@v4
         with:
           go-version: 1.24.1
           cache: true
-
-      # afrogweb 用 pnpm 管理依赖（仓库提交了 pnpm-lock.yaml）。版本与其 lockfile
-      # 保持一致，避免不同 pnpm 主版本读同一个 lockfile 时行为漂移。
       - uses: pnpm/action-setup@v4
         with:
           version: 10.32.0
           run_install: false
-
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-
+          cache: npm
       - name: Go modules download
         run: |
           set -euo pipefail
           go mod download
-
       - name: Build and copy afrogweb assets
         env:
           AFROGWEB_TOKEN: ${{ secrets.AFROGWEB_TOKEN }}
@@ -153,7 +149,6 @@ jobs:
               exit 1
             fi
           fi
-
       - name: Verify embedded web assets
         if: env.WEB_ASSETS_READY == 'true'
         run: |
@@ -165,7 +160,6 @@ jobs:
           [ "$ENTRY_COUNT" -gt 0 ] || (echo "missing entry js" && exit 1)
           CHUNKS=$(ls pkg/web/webpath/_app/immutable/chunks/*.js | wc -l)
           [ "$CHUNKS" -gt 0 ] || (echo "missing chunks js" && exit 1)
-
       - name: Detect unmatched web assets (embed coverage guard)
         if: env.WEB_ASSETS_READY == 'true'
         run: |
@@ -180,7 +174,6 @@ jobs:
             echo "Please update pkg/web/embed.go to include these paths." >&2
             exit 1
           fi
-
       - name: Sign official PoCs
         env:
           AFROG_POC_SIGNING_KEY_B64: ${{ secrets.AFROG_POC_SIGNING_KEY_B64 }}
@@ -198,74 +191,12 @@ jobs:
             exit 1
           fi
           echo "AFROG_POC_PUBKEY_B64=${PUBKEY}" >> "${GITHUB_ENV}"
-
       - name: Smoke build (validate go:embed)
         env:
           CGO_ENABLED: 0
         run: |
           go build -trimpath -ldflags "-s -w" -o ./_afrog_smoke ./cmd/afrog
           file ./_afrog_smoke || true
-
-      # - name: Validate embedded FS contents
-      #   env:
-      #     CGO_ENABLED: 0
-      #   run: |
-      #     set -euo pipefail
-
-      #     # 创建临时 Go 脚本检查 embed.FS
-      #     cat <<EOF > embed_check.go
-      #     package main
-
-      #     import (
-      #       "embed"
-      #       "fmt"
-      #       "io/fs"
-      #       "os"
-      #       "path/filepath"
-      #       "strings"
-      #     )
-
-      #     //go:embed webpath/*.*
-      #     //go:embed webpath/fonts/*/*.*
-      #     //go:embed webpath/_app/*.*
-      #     //go:embed webpath/_app/immutable/*/*.*
-      #     var webpathFS embed.FS
-
-      #     func main() {
-      #       var hasEntryJS bool
-      #       err := fs.WalkDir(webpathFS, ".", func(path string, d fs.DirEntry, err error) error {
-      #         if err != nil {
-      #           return err
-      #         }
-      #         if !d.IsDir() && strings.HasPrefix(path, "webpath/_app/immutable/entry/") && strings.HasSuffix(path, ".js") {
-      #           hasEntryJS = true
-      #           fmt.Printf("Found entry JS: %s\n", path)
-      #         }
-      #         return nil
-      #       })
-      #       if err != nil {
-      #         fmt.Printf("Error walking FS: %v\n", err)
-      #         os.Exit(1)
-      #       }
-      #       if !hasEntryJS {
-      #         fmt.Println("No JS files found in _app/immutable/entry/")
-      #         os.Exit(1)
-      #       }
-      #       fmt.Println("Embedded FS validation passed")
-      #     }
-      #     EOF
-
-      #     # 编译并运行检查
-      #     go build -o embed_check embed_check.go
-      #     ./embed_check > embed_check.log 2>&1
-      #     cat embed_check.log
-      #     if grep -q "validation passed" embed_check.log; then
-      #       echo "Embedded FS OK"
-      #     else
-      #       echo "Embedded FS validation failed" >&2
-      #       exit 1
-      #     fi
-
       - name: Web smoke test (-web mode assets)
         if: env.WEB_ASSETS_READY == 'true'
         env:
@@ -311,7 +242,6 @@ jobs:
             curl -fsS -I "http://127.0.0.1:16868$CSSURL" | grep -E "HTTP/.* 200" >/dev/null
             curl -fsS -I "http://127.0.0.1:16868$CSSURL" | grep -i "Content-Type: text/css" >/dev/null
           fi
-
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
@@ -320,17 +250,15 @@ jobs:
             _afrog_smoke
             _afrog_pid
             web_smoke.log
-
       - name: Goreleaser snapshot (no publish)
         if: github.event_name == 'workflow_dispatch' && github.event.inputs.dry_run == 'true'
         uses: goreleaser/goreleaser-action@v4
         with:
-          args: "release --clean --snapshot --skip=publish --skip=validate"
+          args: release --clean --snapshot --skip=publish --skip=validate
           version: latest
           workdir: .
         env:
-          GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
-
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Upload snapshot artifacts
         if: github.event_name == 'workflow_dispatch' && github.event.inputs.dry_run == 'true'
         uses: actions/upload-artifact@v4
@@ -338,13 +266,12 @@ jobs:
           name: afrog-dist-snapshot
           path: |
             dist/**
-
       - name: Goreleaser publish
         if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.dry_run != 'true')
         uses: goreleaser/goreleaser-action@v4
         with:
-          args: "release --clean --skip=validate"
+          args: release --clean --skip=validate
           version: latest
           workdir: .
         env:
-          GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
